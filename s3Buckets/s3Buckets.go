@@ -1,4 +1,4 @@
-package s3_buckets
+package s3Buckets
 
 import (
 	"bytes"
