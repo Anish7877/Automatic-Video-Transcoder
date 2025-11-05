@@ -92,6 +92,5 @@ func (buckets S3Buckets) S3TriggerLambda(ctx context.Context, s3Event events.S3E
 		}
 		log.Printf("successfully retrieved %s/%s of type %s", bucket, key, *headOutput.ContentType)
 	}
-
 	return nil
 }
