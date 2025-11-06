@@ -72,12 +72,7 @@ func (buckets S3Buckets) S3Download(ctx context.Context, bucketName string, obje
 }
 
 func (buckets S3Buckets) S3TriggerLambda(ctx context.Context, s3Event events.S3Event) error {
-	sdkConfig, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		log.Printf("failed to load default config: %s", err)
-		return err
-	}
-	s3Client := s3.NewFromConfig(sdkConfig)
+	s3Client := buckets.S3Client
 
 	for _, record := range s3Event.Records {
 		bucket := record.S3.Bucket.Name
