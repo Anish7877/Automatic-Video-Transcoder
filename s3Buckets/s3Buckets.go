@@ -3,23 +3,15 @@ package s3Buckets
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
-	"os"
 	"time"
 
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
-
-type SQSClient interface {
-	SendMessage(ctx context.Context, params *sqs.SendMessageInput, optfuns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
-}
 
 type S3Buckets struct {
 	S3Client *s3.Client
@@ -75,30 +67,4 @@ func (buckets S3Buckets) S3Download(ctx context.Context, bucketName string, obje
 			bucketName, objectKey, err)
 	}
 	return buffer.Bytes(), err
-}
-
-func (buckets S3Buckets) S3TriggerLambda(ctx context.Context, s3Event events.S3Event) error {
-	var sqsQueue SQSClient
-	queueUrl := os.Getenv("SQS_QUEUE_URL")
-
-	for _, record := range s3Event.Records {
-		messageBody, err := json.Marshal(record)
-		if err != nil {
-			log.Fatalf("Error marshalling record json record: %s",err)
-			continue
-		}
-
-		sendInput := &sqs.SendMessageInput{
-			MessageBody: aws.String(string(messageBody)),
-			QueueUrl: aws.String(queueUrl),
-		}
-
-		result, err := sqsQueue.SendMessage(context.TODO(), sendInput)
-		if err != nil {
-			log.Fatalf("Error sending message: %s",err)
-			return err
-		}
-		log.Printf("Sent message: %s for object: %s", *result.MessageId,record.S3.Object.Key)
-	}
-	return nil
 }
