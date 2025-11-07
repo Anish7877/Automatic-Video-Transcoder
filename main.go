@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 )
 
@@ -19,15 +20,21 @@ type SQSClientAPI interface {
 		optFns ...func(*sqs.Options)) (*sqs.SendMessageOutput, error)
 }
 
+type S3ClientAPI interface {
+	HeadObject(ctx context.Context,
+		params *s3.HeadObjectInput,
+		optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+}
+
 var (
 	sqsClient SQSClientAPI
+	s3Client  S3ClientAPI
 	queueURL  string
 )
 
 func init() {
-	var ok bool
 	queueURL = os.Getenv("SQS_QUEUE_URL")
-	if !ok {
+	if queueURL == "" {
 		panic("SQS_QUEUE_URL environment variable not set")
 	}
 
@@ -37,15 +44,52 @@ func init() {
 	}
 
 	sqsClient = sqs.NewFromConfig(cfg)
+	s3Client = s3.NewFromConfig(cfg)
+}
+
+type JobMessage struct {
+	InputBucket  string `json:"input_bucket"`
+	InputKey     string `json:"input_key"`
+	OutputBucket string `json:"output_bucket"`
+	TargetFormat string `json:"target_format"`
 }
 
 func HandleRequest(ctx context.Context, s3Event events.S3Event) (string, error) {
-	for _, record := range s3Event.Records {
-		fmt.Printf("Processing record for S3 object: %s/%s\n", record.S3.Bucket.Name, record.S3.Object.Key)
+	outputBucket := os.Getenv("OUTPUT_BUCKET_NAME")
+	if outputBucket == "" {
+		panic("OUTPUT_BUCKET_NAME environment variable not set")
+	}
 
-		messageBody, err := json.Marshal(record)
+	for _, record := range s3Event.Records {
+		bucket := record.S3.Bucket.Name
+		key := record.S3.Object.Key
+
+		fmt.Printf("Processing record for S3 object: %s/%s\n", bucket, key)
+
+		headInput := &s3.HeadObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(key),
+		}
+
+		headOutput, err := s3Client.HeadObject(context.TODO(), headInput)
 		if err != nil {
-			fmt.Printf("Error marshalling S3 record: %v\n", err)
+			fmt.Printf("Error calling HeadObject for %s/%s: %v\n", bucket, key, err)
+			continue
+		}
+		targetFormat := "mp4"
+		if val, ok := headOutput.Metadata["target-format"]; ok {
+			targetFormat = val
+		}
+
+		job := JobMessage{
+			InputBucket:  bucket,
+			InputKey:     key,
+			OutputBucket: outputBucket,
+			TargetFormat: targetFormat,
+		}
+		messageBody, err := json.Marshal(job)
+		if err != nil {
+			fmt.Printf("Error marshalling job message: %v\n", err)
 			continue
 		}
 
