@@ -1,74 +1,65 @@
 package s3Buckets
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"log"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
-type S3Buckets struct {
-	S3Client *s3.Client
-	S3Uploader *manager.Uploader
-	S3Downloader *manager.Downloader
+type UploadRequestPayload struct {
+	Filename     string `json:"filename" binding:"required"`
+	ContentType  string `json:"contentType" binding:"required"`
+	TargetFormat string `json:"target-format" binding:"required"`
 }
 
-func (buckets S3Buckets) S3Upload(ctx context.Context, bucketName string, objectKey string, content string, targetFormat string) (string, error) {
-	var outKey string
-	const Mibs int64 = 10
-	userMetadata := map[string]string {
-		"target-format" : targetFormat,
-	}
-	input := &s3.PutObjectInput{
-		Bucket: aws.String(bucketName),
-		Key: aws.String(objectKey),
-		Metadata: userMetadata,
-		Body: bytes.NewReader([]byte(content)),
-		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
-	}
-	output, err := buckets.S3Uploader.Upload(ctx, input, func (u *manager.Uploader) {
-		u.PartSize = Mibs * 1024 * 1024
-		u.Concurrency = 10
-	})
-	if err != nil {
-		var noBucket *types.NoSuchBucket
-		if errors.As(err, &noBucket) {
-			log.Printf("Bucket %s does not exist.\n", bucketName)
-			err = noBucket
-		}
-	} else {
-		err := s3.NewObjectExistsWaiter(buckets.S3Client).Wait(ctx, &s3.HeadObjectInput{
-			Bucket: aws.String(bucketName),
-			Key: aws.String(objectKey),
-		}, time.Minute)
-		if err != nil {
-			log.Printf("Failed attempt to wait for object %s to exist in %s.\n", objectKey, bucketName)
-		} else {
-			outKey = *output.Key
-		}
-	}
-	return outKey, err
+type S3BucketService struct {
+	S3Client        *s3.Client
+	S3PresignClient *s3.PresignClient
 }
 
-func (buckets S3Buckets) S3Download(ctx context.Context, bucketName string, objectKey string) ([]byte, error){
-	const Mibs int64 = 10
-	buffer := manager.NewWriteAtBuffer([]byte{})
-	_, err := buckets.S3Downloader.Download(ctx, buffer, &s3.GetObjectInput{
-		Bucket: aws.String(bucketName),
-		Key: aws.String(objectKey),
-	}, func(d *manager.Downloader) {
-		d.PartSize = Mibs * 1024 * 1024
-		d.Concurrency = 10
-	})
+func NewS3BucketService(ctx context.Context) (*S3BucketService, error) {
+	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
-		log.Printf("Couldn't download large object from %v:%v. Here's why: %v\n",
-			bucketName, objectKey, err)
+		return nil, err
 	}
-	return buffer.Bytes(), err
+
+	client := s3.NewFromConfig(cfg)
+	presignClient := s3.NewPresignClient(client)
+
+	return &S3BucketService{
+		S3Client:        client,
+		S3PresignClient: presignClient,
+	}, nil
+}
+
+func (s *S3BucketService) GeneratePresignedURL(ctx context.Context, bucketName string, payload UploadRequestPayload) (string, error) {
+
+	objectKey := payload.Filename
+
+	userMetadata := map[string]string{
+		"target-format": payload.TargetFormat,
+	}
+
+	presignRequest := &s3.PutObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(objectKey),
+		ContentType: aws.String(payload.ContentType),
+		Metadata:    userMetadata,
+	}
+
+	req, err := s.S3PresignClient.PresignPutObject(
+		ctx,
+		presignRequest,
+		s3.WithPresignExpires(15*time.Minute),
+	)
+	if err != nil {
+		log.Printf("Couldn't get presigned URL: %v", err)
+		return "", err
+	}
+
+	return req.URL, nil
 }

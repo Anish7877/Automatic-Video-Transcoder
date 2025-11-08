@@ -3,55 +3,47 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
-	"videotranscoder/aws-services/s3Buckets"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/joho/godotenv"
+	"videotranscoder/aws-services/s3Buckets"
+	"github.com/gin-gonic/gin"
 )
 
+
 func main() {
-	err := godotenv.Load()
+	bucketName := os.Getenv("S3_INPUT_BUCKET_NAME")
+	if bucketName == "" {
+		log.Fatal("S3_BUCKET_NAME environment variable not set")
+	}
+
+	ctx := context.Background()
+	s3Service, err := s3Buckets.NewS3BucketService(ctx)
 	if err != nil {
-		log.Fatalf("Error loading .env file: %s", err)
+		log.Fatalf("Failed to create S3 service: %s", err)
 	}
 
-	sdkConfig, err := config.LoadDefaultConfig(context.TODO())
-	if err != nil {
-		log.Fatalf("Error loading default config: %s", err)
-	}
+	router := gin.Default()
 
-	s3Client := s3.NewFromConfig(sdkConfig)
-	s3Uploader := manager.NewUploader(s3Client)
-	s3Downloader := manager.NewDownloader(s3Client)
+	router.POST("/upload-request", func(c *gin.Context) {
+		var payload s3Buckets.UploadRequestPayload
 
-	buckets := s3Buckets.S3Buckets{
-		S3Client:     s3Client,
-		S3Uploader:   s3Uploader,
-		S3Downloader: s3Downloader,
-	}
+		if err := c.ShouldBindJSON(&payload); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 
-	bucketName := "cloud-computing-project-video-uploads"
-	objectKey := "hellos3.txt"
-	content := "Hello, S3"
+		uploadURL, err := s3Service.GeneratePresignedURL(c.Request.Context(), bucketName, payload)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not generate upload URL"})
+			return
+		}
 
-	// upload file to a particular bucket
-	outKey, err := buckets.S3Upload(context.TODO(), bucketName, objectKey, content)
-	if err != nil {
-		log.Fatalf("failed to upload file: %v", err)
-	}
-	log.Printf("Successfully Uploaded file. Output Key: %s", outKey)
+		c.JSON(http.StatusOK, gin.H{
+			"upload_url": uploadURL,
+		})
+	})
 
-	// download data from a particular bucket
-	data, err := buckets.S3Download(context.TODO(), bucketName, objectKey)
-	if err != nil {
-		log.Fatalf("Failed to download file: %v", err)
-	}
-	err = os.WriteFile(objectKey, data, 0644)
-	if err != nil {
-		log.Fatalf("Failed to Write to file: %v", err)
-	}
-	log.Printf("Successfully Download file: %v", objectKey)
+	log.Println("Starting server on :8080")
+	router.Run(":8080")
 }
