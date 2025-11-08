@@ -19,12 +19,16 @@ type S3Buckets struct {
 	S3Downloader *manager.Downloader
 }
 
-func (buckets S3Buckets) S3Upload(ctx context.Context, bucketName string, objectKey string, content string) (string, error) {
+func (buckets S3Buckets) S3Upload(ctx context.Context, bucketName string, objectKey string, content string, targetFormat string) (string, error) {
 	var outKey string
 	const Mibs int64 = 10
+	userMetadata := map[string]string {
+		"target-format" : targetFormat,
+	}
 	input := &s3.PutObjectInput{
 		Bucket: aws.String(bucketName),
 		Key: aws.String(objectKey),
+		Metadata: userMetadata,
 		Body: bytes.NewReader([]byte(content)),
 		ChecksumAlgorithm: types.ChecksumAlgorithmSha256,
 	}
