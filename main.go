@@ -7,11 +7,13 @@ import (
 	"os"
 
 	"videotranscoder/aws-services/s3Buckets"
+	"github.com/joho/godotenv"
 	"github.com/gin-gonic/gin"
 )
 
 
 func main() {
+	godotenv.Load()
 	bucketName := os.Getenv("S3_INPUT_BUCKET_NAME")
 	if bucketName == "" {
 		log.Fatal("S3_BUCKET_NAME environment variable not set")
@@ -25,7 +27,7 @@ func main() {
 
 	router := gin.Default()
 
-	router.POST("/upload-request", func(c *gin.Context) {
+	router.POST("/upload", func(c *gin.Context) {
 		var payload s3Buckets.UploadRequestPayload
 
 		if err := c.ShouldBindJSON(&payload); err != nil {
