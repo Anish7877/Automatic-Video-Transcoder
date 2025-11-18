@@ -67,10 +67,10 @@ func (s *S3BucketService) GenerateUploadPresignedURL(ctx context.Context, bucket
 	return req.URL, nil
 }
 
-func (s *S3BucketService) GenerateDownlaodPresignedURL(ctx context.Context, bucketName, objectKey string) (string, error){
+func (s *S3BucketService) GenerateDownlaodPresignedURL(ctx context.Context, bucketName, objectKey string) (string, error) {
 	presignRequest := &s3.GetObjectInput{
-		Bucket:      aws.String(bucketName),
-		Key:         aws.String(objectKey),
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(objectKey),
 	}
 
 	req, err := s.S3PresignClient.PresignGetObject(
