@@ -127,6 +127,22 @@ func uploadFile(presignedURL, filePath, contentType, targetFormat string) error 
 	return nil
 }
 
+func CORSMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
+		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
+		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
+
+		if c.Request.Method == "OPTIONS" {
+			c.AbortWithStatus(204)
+			return
+		}
+
+		c.Next()
+	}
+}
+
 func main() {
 	godotenv.Load()
 
@@ -157,15 +173,40 @@ func main() {
 	}
 
 	router := gin.Default()
+	router.Use(CORSMiddleware()) // Apply CORS
 
 	router.POST("/upload", func(c *gin.Context) {
-		var payload s3Buckets.UploadRequestPayload
-		if err := c.ShouldBindJSON(&payload); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		fileHeader, err := c.FormFile("video")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Video file is required"})
 			return
 		}
 
-		// Generate presigned upload URL
+		targetFormat := c.PostForm("format")
+		if targetFormat == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Target format is required"})
+			return
+		}
+
+		tempDir, err := os.MkdirTemp("", "transcoder_upload")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp directory"})
+			return
+		}
+		defer os.RemoveAll(tempDir)
+
+		tempFilePath := filepath.Join(tempDir, fileHeader.Filename)
+		if err := c.SaveUploadedFile(fileHeader, tempFilePath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save uploaded file"})
+			return
+		}
+
+		payload := s3Buckets.UploadRequestPayload{
+			Filepath:     tempFilePath,
+			ContentType:  fileHeader.Header.Get("Content-Type"),
+			TargetFormat: targetFormat,
+		}
+
 		uploadURL, err := s3Service.GenerateUploadPresignedURL(c.Request.Context(), inputBucketName, payload)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not generate upload URL"})
@@ -174,14 +215,12 @@ func main() {
 
 		fmt.Println("Upload URL generated:", uploadURL)
 
-		// Upload the file
 		err = uploadFile(uploadURL, payload.Filepath, payload.ContentType, payload.TargetFormat)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Upload failed: %v", err)})
 			return
 		}
 
-		// Calculate the expected output key
 		fileName := filepath.Base(payload.Filepath)
 		originalExt := filepath.Ext(payload.Filepath)
 		Ext := payload.TargetFormat
@@ -189,7 +228,6 @@ func main() {
 
 		fmt.Printf("Waiting for job completion for output key: %s\n", expectedOutputKey)
 
-		// Poll SQS queue for job completion (with 5 minute timeout)
 		notification, err := sqsService.PollForJobCompletion(c.Request.Context(), expectedOutputKey, 5*time.Minute)
 		if err != nil {
 			c.JSON(http.StatusRequestTimeout, gin.H{
@@ -201,7 +239,6 @@ func main() {
 
 		fmt.Printf("Job completed! Output: %s\n", notification.OutputKey)
 
-		// Generate download presigned URL
 		downloadURL, err := s3Service.GenerateDownlaodPresignedURL(c.Request.Context(), outputBucketName, notification.OutputKey)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to generate download URL"})
