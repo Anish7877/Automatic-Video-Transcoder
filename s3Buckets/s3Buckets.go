@@ -3,15 +3,17 @@ package s3Buckets
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/joho/godotenv"
 )
 
 type UploadRequestPayload struct {
-	Filename     string `json:"filename" binding:"required"`
+	Filepath     string `json:"filepath" binding:"required"`
 	ContentType  string `json:"contentType" binding:"required"`
 	TargetFormat string `json:"target-format" binding:"required"`
 }
@@ -22,6 +24,7 @@ type S3BucketService struct {
 }
 
 func NewS3BucketService(ctx context.Context) (*S3BucketService, error) {
+	godotenv.Load()
 	cfg, err := config.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, err
@@ -36,9 +39,9 @@ func NewS3BucketService(ctx context.Context) (*S3BucketService, error) {
 	}, nil
 }
 
-func (s *S3BucketService) GeneratePresignedURL(ctx context.Context, bucketName string, payload UploadRequestPayload) (string, error) {
+func (s *S3BucketService) GenerateUploadPresignedURL(ctx context.Context, bucketName string, payload UploadRequestPayload) (string, error) {
 
-	objectKey := payload.Filename
+	objectKey := filepath.Base(payload.Filepath)
 
 	userMetadata := map[string]string{
 		"target-format": payload.TargetFormat,
@@ -62,4 +65,21 @@ func (s *S3BucketService) GeneratePresignedURL(ctx context.Context, bucketName s
 	}
 
 	return req.URL, nil
+}
+
+func (s *S3BucketService) GenerateDownlaodPresignedURL(ctx context.Context, bucketName, objectKey string) (string, error){
+	presignRequest := &s3.GetObjectInput{
+		Bucket:      aws.String(bucketName),
+		Key:         aws.String(objectKey),
+	}
+
+	req, err := s.S3PresignClient.PresignGetObject(
+		ctx,
+		presignRequest,
+		s3.WithPresignExpires(15*time.Minute),
+	)
+	if err != nil {
+		log.Printf("Couldn't get presigned URL: %v", err)
+	}
+	return req.URL, err
 }
